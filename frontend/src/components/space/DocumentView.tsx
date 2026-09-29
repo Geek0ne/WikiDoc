@@ -8,6 +8,7 @@ import {
   MoreHorizontal,
   Paperclip,
   Pencil,
+  Shapes,
   Star,
   Trash2,
   ShieldCheck,
@@ -17,7 +18,7 @@ import { toast } from '../../stores/toast';
 import { ApiError } from '../../api/client';
 import * as documentsApi from '../../api/documents';
 import * as attachmentsApi from '../../api/attachments';
-import { bindCodeCopy, extractToc, renderMarkdown, type TocItem } from '../../lib/markdown';
+import { bindCodeCopy, bindDrawingEmbeds, extractToc, renderMarkdown, type TocItem } from '../../lib/markdown';
 import type {
   Attachment,
   DocumentDetail,
@@ -36,6 +37,8 @@ import {
   Tooltip,
 } from '../ui';
 import { AclModal } from './AclModal';
+import { DrawingModal } from '../drawing/DrawingModal';
+import { DataTablesSection } from '../datatable/DataTablesSection';
 
 export interface DocumentViewProps {
   docId: number;
@@ -60,6 +63,7 @@ export function DocumentView({ docId, spaceKey, spaceName, onChanged, onEdit, on
   const [versionOpen, setVersionOpen] = useState(false);
   const [aclOpen, setAclOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [drawingOpen, setDrawingOpen] = useState(false);
 
   const load = useCallback(async (): Promise<void> => {
     setLoadError(null);
@@ -191,6 +195,11 @@ export function DocumentView({ docId, spaceKey, spaceName, onChanged, onEdit, on
             <DropdownItem icon={<History size={14} aria-hidden />} onClick={() => setVersionOpen(true)}>
               {t('doc.versions')}
             </DropdownItem>
+            {canWrite && (
+              <DropdownItem icon={<Shapes size={14} aria-hidden />} onClick={() => setDrawingOpen(true)}>
+                {t('drawing.insertDrawing')}
+              </DropdownItem>
+            )}
             {canManage && (
               <DropdownItem icon={<ShieldCheck size={14} aria-hidden />} onClick={() => setAclOpen(true)}>
                 {t('space.acl')}
@@ -215,6 +224,7 @@ export function DocumentView({ docId, spaceKey, spaceName, onChanged, onEdit, on
             <article className="mx-auto max-w-3xl px-6 py-8 md:px-10">
               <DocContent docId={doc.id} markdown={doc.content_md} />
               <AttachmentPanel docId={doc.id} />
+              <DataTablesSection docId={doc.id} canWrite={canWrite} />
             </article>
           </div>
           <TocPanel containerId={`doc-body-${docId}`} />
@@ -223,6 +233,24 @@ export function DocumentView({ docId, spaceKey, spaceName, onChanged, onEdit, on
 
       {/* 弹层组 */}
       <VersionModal open={versionOpen} docId={doc.id} onClose={() => setVersionOpen(false)} onRolledBack={() => void load()} />
+      <DrawingModal
+        open={drawingOpen}
+        docId={doc.id}
+        canWrite={canWrite}
+        onClose={() => setDrawingOpen(false)}
+        onInsert={(drawingId) => {
+          // 在文末追加画板围栏引用并保存；保存后重载触发渲染
+          const md = `${doc.content_md ?? ''}\n\n\`\`\`drawing:${drawingId}\n\`\`\`\n`;
+          void documentsApi
+            .updateDocument(doc.id, { content_md: md })
+            .then(() => {
+              toast.success(t('drawing.inserted'));
+              void load();
+              onChanged?.();
+            })
+            .catch((err) => toast.error(err instanceof Error ? err.message : t('toast.networkError')));
+        }}
+      />
       {canManage && (
         <AclModal
           open={aclOpen}
@@ -253,7 +281,12 @@ function DocContent({ docId, markdown }: { docId: number; markdown: string }) {
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    return bindCodeCopy(el);
+    const offCopy = bindCodeCopy(el);
+    const offDrawings = bindDrawingEmbeds(el);
+    return () => {
+      offCopy();
+      offDrawings();
+    };
   }, [html]);
 
   return <div id={`doc-body-${docId}`} ref={ref} className="wiki-prose" dangerouslySetInnerHTML={{ __html: html }} />;
