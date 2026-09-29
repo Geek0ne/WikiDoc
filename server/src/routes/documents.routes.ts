@@ -175,6 +175,7 @@ router.post(
 
 router.get(
   '/favorites',
+  requireAuth,
   h((req: AuthRequest, res) => {
     ok(res, { items: listFavorites(req.user!, req.groupIds ?? []) });
   })
@@ -182,6 +183,7 @@ router.get(
 
 router.get(
   '/recent',
+  requireAuth,
   h((req: AuthRequest, res) => {
     ok(res, { items: listRecent(req.user!, req.groupIds ?? [], 10) });
   })

@@ -31,7 +31,7 @@ export const config = {
   uploadDir: UPLOAD_DIR,
   dbPath: path.join(DATA_DIR, 'wikidoc.db'),
   /** 前端构建产物目录，存在时由后端静态托管，实现单端口部署 */
-  clientDist: path.resolve(process.cwd(), '../client/dist'),
+  clientDist: path.resolve(process.cwd(), '../frontend/dist'),
   jwtSecret: process.env.WIKIDOC_JWT_SECRET || '',
   jwtRefreshSecret: process.env.WIKIDOC_JWT_REFRESH_SECRET || '',
   accessTokenTtl: '15m',

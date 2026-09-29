@@ -1,0 +1,28 @@
+# Git 与本地环境
+.git
+.gitignore
+.vscode
+.workbuddy
+coverage
+
+# 依赖与构建产物(容器内重新安装/构建)
+node_modules
+**/node_modules
+dist
+**/dist
+
+# 运行时数据,严禁烤入镜像
+data
+**/data
+*.db
+*.db-wal
+*.db-shm
+uploads
+
+# 与镜像无关的目录与文件
+docs
+deploy
+*.md
+*.log
+.env
+.env.local

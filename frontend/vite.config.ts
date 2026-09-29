@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 /**
- * 开发态走 Vite 独立端口，接口代理到后端 3100；
+ * 开发态走 Vite 独立端口，接口代理到后端 3000；
  * 生产态由后端静态托管 dist，同端口提供，无需代理。
  */
 export default defineConfig({
@@ -11,7 +11,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:3100',
+        target: 'http://localhost:3000',
         changeOrigin: true,
       },
     },

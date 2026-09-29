@@ -1,0 +1,3199 @@
+openapi: 3.0.3
+
+info:
+  title: WikiDoc 企业文档知识库 API
+  version: 1.0.0
+  description: |
+    WikiDoc 内网文档知识库接口契约。所有业务端点前缀 /api/v1。
+
+    统一响应包装：{ code, data, message }。code=0 表示成功，非 0 为业务错误码。
+    统一分页包装：data = { items, total, page, limit, hasMore }。
+
+    权限语义（permission 字段）：1=read 读，2=write 写，3=manage 管理。高等级隐含低等级。
+    权限主体 subjectType：user 用户 / group 用户组 / everyone 全体已登录用户。
+    认证标记：P=需登录（Bearer），A=需管理员或该空间/文档的管理权限。
+
+    实现约束：服务端 CommonJS + Express 4.21.2，better-sqlite3 11.10.0（SQLite 3.49.2）。
+servers:
+  - url: http://localhost:8080/api/v1
+    description: 本地与内网单端口部署
+
+tags:
+  - name: auth
+    description: 认证与会话
+  - name: users
+    description: 用户
+  - name: groups
+    description: 用户组与 AD 组同步
+  - name: spaces
+    description: 空间
+  - name: documents
+    description: 文档
+  - name: versions
+    description: 文档版本
+  - name: attachments
+    description: 附件
+  - name: search
+    description: 全文检索
+  - name: permissions
+    description: 权限 ACL
+  - name: blocks
+    description: 编辑器扩展块（画板与多维表格）
+  - name: import
+    description: Word / Excel 导入
+  - name: notifications
+    description: 通知渠道、订阅与日志
+  - name: settings
+    description: 站点设置
+  - name: admin
+    description: 运维与审计
+
+security:
+  - bearerAuth: []
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: access token，有效期 15 分钟。refresh token 存放于 httpOnly + Secure + SameSite=Lax 的 Cookie，不在此处传递。
+
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema: { type: integer, minimum: 1, default: 1 }
+      description: 页码，从 1 开始
+    Limit:
+      name: limit
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      description: 每页条数
+    Q:
+      name: q
+      in: query
+      schema: { type: string }
+      description: 关键字
+    UserId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 用户 ID
+    GroupId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 用户组 ID
+    SpaceId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 空间 ID
+    DocumentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 文档 ID
+    VersionId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 版本 ID
+    AttachmentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 附件 ID
+    DrawingId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 画板 ID
+    TableId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 多维表格 ID
+    RowId:
+      name: rowId
+      in: path
+      required: true
+      schema: { type: string }
+      description: 表格行 ID
+    ChannelId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 通知渠道 ID
+    SubscriptionId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 订阅 ID
+    JobId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+      description: 导入任务 ID
+
+  responses:
+    BadRequest:
+      description: 参数校验失败
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  code: { type: integer, example: 1001 }
+    Unauthorized:
+      description: 未认证或 token 失效
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  code: { type: integer, example: 2001 }
+    Forbidden:
+      description: 已认证但权限不足
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  code: { type: integer, example: 2003 }
+    NotFound:
+      description: 资源不存在或无权访问（二者对外合并为 404，避免资源枚举）
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  code: { type: integer, example: 3001 }
+    TooManyRequests:
+      description: 触发速率限制
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  code: { type: integer, example: 4001 }
+    InternalError:
+      description: 服务端异常
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                properties:
+                  code: { type: integer, example: 5000 }
+
+  schemas:
+
+    Envelope:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: integer
+          description: 0 成功；1001 参数错误，2001 未认证，2003 无权限，3001 不存在，4001 限流，5000 服务端异常
+          example: 0
+        message:
+          type: string
+          description: 人类可读描述，成功时为空字符串
+          example: ""
+        data:
+          description: 业务载荷，各端点不同
+
+    PagedMeta:
+      type: object
+      required: [items, total, page, limit, hasMore]
+      properties:
+        items:
+          type: array
+          items: {}
+        total: { type: integer, example: 128 }
+        page: { type: integer, example: 1 }
+        limit: { type: integer, example: 20 }
+        hasMore: { type: boolean, example: true }
+
+    Ok:
+      type: object
+      properties:
+        ok: { type: boolean, example: true }
+
+    Theme:
+      type: string
+      enum: [graphite, inkgreen, slate]
+      default: graphite
+      description: |
+        主题（配色）。与 tokens.css 中的 [data-theme="<theme>-light|dark"] 前缀一一对应。
+        与 Mode 拆开存储，新增主题只需扩展本枚举，不触碰 Mode。
+
+    Mode:
+      type: string
+      enum: [light, dark, auto]
+      default: light
+      description: |
+        明暗模式。auto 表示跟随系统 prefers-color-scheme，由前端在运行时解析为 light 或 dark 后写入 data-theme。
+        auto 必须存原始值而非解析后的值，否则用户更换系统主题后不会跟随变化。
+
+    LoginRequest:
+      type: object
+      required: [username, password]
+      properties:
+        username: { type: string, example: "zhangsan" }
+        password: { type: string, format: password }
+        remember:
+          type: boolean
+          description: true 时 refresh token 有效期延长至 30 天，否则为 7 天
+          example: false
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+
+    PasswordChangeRequest:
+      type: object
+      required: [oldPassword, newPassword]
+      properties:
+        oldPassword: { type: string, format: password }
+        newPassword: { type: string, format: password, minLength: 10 }
+
+    ResetPasswordRequest:
+      type: object
+      required: [newPassword]
+      properties:
+        newPassword: { type: string, format: password, minLength: 10 }
+        mustChangeNextLogin: { type: boolean, example: true }
+
+    TokenPair:
+      type: object
+      required: [accessToken, refreshToken]
+      properties:
+        accessToken: { type: string, description: Bearer token，有效期 15 分钟 }
+        refreshToken: { type: string, description: 同时种入 httpOnly Cookie }
+        expiresIn: { type: integer, example: 900 }
+
+    User:
+      type: object
+      required: [id, username, displayName, authSource, status]
+      properties:
+        id: { type: string }
+        username: { type: string, example: "zhangsan" }
+        displayName: { type: string, example: "张三" }
+        email: { type: string, format: email }
+        authSource: { type: string, enum: [local, ldap, oidc], example: "ldap" }
+        status: { type: string, enum: [active, disabled], example: "active" }
+        isSuperAdmin: { type: boolean, example: false }
+        locale: { type: string, enum: ["zh-CN", "en-US"], example: "zh-CN" }
+        theme: { allOf: [{ $ref: '#/components/schemas/Theme' }], example: "graphite" }
+        mode: { allOf: [{ $ref: '#/components/schemas/Mode' }], example: "auto" }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
+        createdAt: { type: string, format: date-time }
+        groups:
+          type: array
+          items: { $ref: '#/components/schemas/GroupRef' }
+
+    GroupRef:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string, example: "研发中心" }
+        source: { type: string, enum: [local, ldap, oidc] }
+
+    UserCreateRequest:
+      type: object
+      required: [username, displayName]
+      properties:
+        username: { type: string }
+        displayName: { type: string }
+        email: { type: string, format: email }
+        password:
+          type: string
+          format: password
+          minLength: 10
+          description: authSource=local 时必填
+        authSource: { type: string, enum: [local, ldap, oidc], default: local }
+        isSuperAdmin: { type: boolean, default: false }
+        groupIds:
+          type: array
+          items: { type: string }
+
+    UserUpdateRequest:
+      type: object
+      properties:
+        displayName: { type: string }
+        email: { type: string, format: email }
+        status: { type: string, enum: [active, disabled] }
+        isSuperAdmin: { type: boolean }
+        locale: { type: string, enum: ["zh-CN", "en-US"] }
+        theme: { $ref: '#/components/schemas/Theme' }
+        mode: { $ref: '#/components/schemas/Mode' }
+
+    Group:
+      type: object
+      required: [id, name, source]
+      properties:
+        id: { type: string }
+        name: { type: string, example: "研发中心" }
+        source: { type: string, enum: [local, ldap, oidc] }
+        externalDn:
+          type: string
+          nullable: true
+          description: AD/LDAP 中的 DN 或 objectGUID，source=ldap 时存在
+          example: "CN=RD,OU=Groups,DC=example,DC=com"
+        description: { type: string }
+        parentId: { type: string, nullable: true }
+        memberCount: { type: integer, example: 42 }
+        createdAt: { type: string, format: date-time }
+
+    GroupCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        parentId: { type: string, nullable: true }
+        source: { type: string, enum: [local, ldap, oidc], default: local }
+        externalDn: { type: string, nullable: true }
+
+    GroupMembersRequest:
+      type: object
+      required: [userIds]
+      properties:
+        userIds:
+          type: array
+          items: { type: string }
+
+    GroupSyncResult:
+      type: object
+      properties:
+        groupsUpserted: { type: integer, example: 128 }
+        membersAdded: { type: integer, example: 512 }
+        membersRemoved: { type: integer, example: 3 }
+        elapsedMs: { type: integer, example: 2400 }
+
+    Space:
+      type: object
+      required: [id, key, name, visibility]
+      properties:
+        id: { type: string }
+        key: { type: string, example: "rd" }
+        name: { type: string, example: "研发中心" }
+        description: { type: string }
+        icon: { type: string, nullable: true, description: lucide 图标名 }
+        visibility: { type: string, enum: [public, space, private] }
+        ownerId: { type: string }
+        defaultPermission: { type: integer, enum: [1, 2, 3], description: "1读 2写 3管理" }
+        docCount: { type: integer, example: 37 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    SpaceCreateRequest:
+      type: object
+      required: [key, name]
+      properties:
+        key: { type: string, description: URL 片段，空间内唯一，建议小写字母与连字符 }
+        name: { type: string }
+        description: { type: string }
+        icon: { type: string }
+        visibility: { type: string, enum: [public, space, private], default: space }
+        defaultPermission: { type: integer, enum: [1, 2, 3], default: 1 }
+
+    DocumentSummary:
+      type: object
+      properties:
+        id: { type: string }
+        spaceId: { type: string }
+        parentId: { type: string, nullable: true }
+        slug: { type: string }
+        title: { type: string, example: "服务器申请流程" }
+        status: { type: string, enum: [draft, published, archived] }
+        visibility: { type: string, enum: [inherit, public, space, private] }
+        ownerId: { type: string }
+        sortOrder: { type: integer }
+        childCount: { type: integer, example: 4 }
+        currentVersionNo: { type: integer, example: 12 }
+        updatedAt: { type: string, format: date-time }
+
+    Document:
+      allOf:
+        - $ref: '#/components/schemas/DocumentSummary'
+        - type: object
+          properties:
+            contentMd: { type: string, description: Markdown 源码，唯一真源 }
+            contentHtml: { type: string, description: 服务端渲染并消毒后的 HTML 缓存 }
+            path: { type: string, example: "/1/12/34/", description: 物化路径，用于权限继承与子树重算 }
+            effectivePermission:
+              type: integer
+              enum: [0, 1, 2, 3]
+              description: 当前用户对该文档的有效权限，0 表示不可见
+            breadcrumb:
+              type: array
+              items: { $ref: '#/components/schemas/DocumentSummary' }
+
+    DocumentCreateRequest:
+      type: object
+      required: [spaceId, title]
+      properties:
+        spaceId: { type: string }
+        parentId: { type: string, nullable: true }
+        title: { type: string }
+        contentMd: { type: string, default: "" }
+        visibility: { type: string, enum: [inherit, public, space, private], default: inherit }
+        status: { type: string, enum: [draft, published], default: draft }
+
+    DocumentUpdateRequest:
+      type: object
+      required: [contentMd]
+      properties:
+        title: { type: string }
+        contentMd: { type: string }
+        visibility: { type: string, enum: [inherit, public, space, private] }
+        changeNote: { type: string, description: 版本说明，写入 document_versions }
+        status: { type: string, enum: [draft, published, archived] }
+
+    DocumentMoveRequest:
+      type: object
+      required: [parentId]
+      properties:
+        parentId: { type: string, nullable: true, description: null 表示移到空间根 }
+        sortOrder: { type: integer }
+
+    DocumentRender:
+      type: object
+      properties:
+        html: { type: string, description: 消毒后的 HTML }
+        toc:
+          type: array
+          description: 自动目录
+          items:
+            type: object
+            properties:
+              level: { type: integer, example: 2 }
+              text: { type: string, example: "申请步骤" }
+              anchor: { type: string, example: "h-申请步骤" }
+
+    Version:
+      type: object
+      properties:
+        id: { type: string }
+        documentId: { type: string }
+        versionNo: { type: integer, example: 12 }
+        title: { type: string }
+        authorId: { type: string }
+        changeNote: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    VersionDetail:
+      allOf:
+        - $ref: '#/components/schemas/Version'
+        - type: object
+          properties:
+            contentMd: { type: string }
+
+    DiffResult:
+      type: object
+      properties:
+        fromVersionNo: { type: integer, example: 10 }
+        toVersionNo: { type: integer, example: 12 }
+        hunks:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, enum: [add, remove, context] }
+              oldLine: { type: integer, nullable: true }
+              newLine: { type: integer, nullable: true }
+              text: { type: string }
+
+    Attachment:
+      type: object
+      required: [id, filename, mime, sizeBytes]
+      properties:
+        id: { type: string }
+        documentId: { type: string, nullable: true }
+        filename: { type: string, example: "架构图.png" }
+        mime: { type: string, example: "image/png" }
+        sizeBytes: { type: integer, example: 204800 }
+        kind: { type: string, enum: [image, file, drawing, import] }
+        uploaderId: { type: string }
+        checksum: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    SearchHit:
+      type: object
+      properties:
+        documentId: { type: string }
+        spaceId: { type: string }
+        title: { type: string }
+        excerpt:
+          type: string
+          description: 基于原文定位截取的摘要，已用 <mark> 包裹高亮词，未经分词空格污染
+        spaceName: { type: string }
+        score: { type: number, format: double, description: bm25 分值，越小越相关 }
+        updatedAt: { type: string, format: date-time }
+        matchedIn:
+          type: array
+          description: 命中位置
+          items: { type: string, enum: [title, body, code] }
+
+    SuggestItem:
+      type: object
+      properties:
+        documentId: { type: string }
+        title: { type: string }
+        spaceName: { type: string }
+
+    ReindexResult:
+      type: object
+      properties:
+        indexed: { type: integer, example: 1287 }
+        elapsedMs: { type: integer, example: 3400 }
+        mode: { type: string, enum: [full, incremental] }
+
+    AclEntry:
+      type: object
+      required: [subjectType, permission]
+      properties:
+        subjectType: { type: string, enum: [user, group, everyone] }
+        subjectId:
+          type: string
+          nullable: true
+          description: subjectType=everyone 时为 null
+        permission:
+          type: integer
+          enum: [1, 2, 3]
+          description: 1=读 2=写 3=管理，高等级隐含低等级
+        inherit:
+          type: boolean
+          default: false
+          description: true 表示该条目沿文档树向下继承给所有子孙文档
+        subjectName:
+          type: string
+          description: 仅响应中出现，便于展示
+
+    AclPutRequest:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          description: 整体替换语义，未提交的条目会被删除
+          items: { $ref: '#/components/schemas/AclEntry' }
+        applyToDescendants:
+          type: boolean
+          default: false
+          description: true 时把 inherit=1 的条目同步刷新到整棵子树
+
+    EffectivePermission:
+      type: object
+      properties:
+        documentId: { type: string }
+        userId: { type: string }
+        permission: { type: integer, enum: [0, 1, 2, 3] }
+        resolution:
+          type: array
+          description: 解析链路，从近到远，便于排查权限来源
+          items:
+            type: object
+            properties:
+              source: { type: string, enum: [direct, ancestor, space, visibility, superAdmin] }
+              objectType: { type: string, enum: [document, space] }
+              objectId: { type: string }
+              subjectType: { type: string, enum: [user, group, everyone] }
+              subjectId: { type: string, nullable: true }
+              permission: { type: integer }
+
+    Drawing:
+      type: object
+      required: [id, name, payload]
+      properties:
+        id: { type: string }
+        documentId: { type: string }
+        name: { type: string, example: "部署拓扑" }
+        payload:
+          type: object
+          description: 自研 SVG 画板图元 JSON；落库与渲染均需剔除 on* 事件属性
+          properties:
+            version: { type: integer, example: 1 }
+            elements:
+              type: array
+              items: { $ref: '#/components/schemas/CanvasElement' }
+        appState:
+          type: object
+          description: 视图状态（缩放、平移、选中），不参与内容比对
+        previewAttachmentId: { type: string, nullable: true }
+        createdBy: { type: string }
+        updatedAt: { type: string, format: date-time }
+
+    CanvasElement:
+      type: object
+      description: |
+        自研 SVG 画板图元。stroke / fill 只允许填 CSS 变量引用（如 var(--color-canvas-stroke)），
+        禁止颜色字面量——否则会绕过设计令牌、在切换主题时不跟随变化。
+        落库与渲染两端都必须剔除 on* 事件属性与 script / foreignObject 节点。
+      required: [id, type]
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [rect, ellipse, line, arrow, text, path] }
+        x: { type: number }
+        y: { type: number }
+        width: { type: number }
+        height: { type: number }
+        points:
+          type: array
+          description: path 与 line 的顶点序列，扁平存储 [x1,y1,x2,y2,...]
+          items: { type: number }
+        stroke:
+          type: string
+          description: |
+            rect / ellipse / line / arrow / path 用 var(--color-canvas-stroke)；
+            选中态改用 var(--color-canvas-stroke-selected)。text 图元无描边。
+          example: "var(--color-canvas-stroke)"
+        fill:
+          type: string
+          description: |
+            rect / ellipse 用 var(--color-canvas-fill-default) 或 var(--color-canvas-fill-1..6)；
+            arrow 头部实心用 var(--color-canvas-arrow-fill)（默认跟随描边色）；
+            line / path 不填充；text 用 var(--color-canvas-text) 作字色。
+            fill-1..6 与 --color-chart-1..6 同源，必须和多维表格单选项、看板标签色保持一致。
+          example: "var(--color-canvas-fill-default)"
+        fillOpacity:
+          type: number
+          description: 填充不透明度，取 var(--canvas-fill-opacity) 的解析值（亮 0.16 / 暗 0.24）
+          example: 0.16
+        strokeWidth: { type: number, example: 2 }
+        text: { type: string, description: 仅 text 图元使用 }
+        selected:
+          type: boolean
+          description: |
+            仅存在于 appState 的选中集合，不落在图元上。选中态只提升描边色并显形控制点，
+            不改填充色——避免选中时图元颜色跳变。
+
+    DrawingCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        payload: { type: object }
+        appState: { type: object }
+
+    DataTable:
+      type: object
+      required: [id, name, schema]
+      properties:
+        id: { type: string }
+        documentId: { type: string }
+        name: { type: string, example: "服务器清单" }
+        schema:
+          type: object
+          description: 列定义
+          properties:
+            columns:
+              type: array
+              items:
+                type: object
+                properties:
+                  id: { type: string }
+                  name: { type: string, example: "负责人" }
+                  type: { type: string, enum: [text, number, date, select, checkbox, user] }
+                  options:
+                    type: array
+                    items: { type: string }
+        rowCount: { type: integer, example: 56 }
+        updatedAt: { type: string, format: date-time }
+
+    DataTableCreateRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        schema: { type: object }
+
+    DataTableRow:
+      type: object
+      properties:
+        id: { type: string }
+        tableId: { type: string }
+        data: { type: object, description: 键为列 id，值为单元格值 }
+        sortOrder: { type: integer }
+
+    RowsUpsertRequest:
+      type: object
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string, description: 存在则更新，缺省则新增 }
+              data: { type: object }
+
+    ImportJob:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, enum: [docx, xlsx] }
+        sourceFilename: { type: string, example: "运维手册.docx" }
+        targetSpaceId: { type: string }
+        status: { type: string, enum: [pending, running, done, failed] }
+        createdBy: { type: string }
+        result:
+          type: object
+          nullable: true
+          properties:
+            documentIds:
+              type: array
+              items: { type: string }
+            tableIds:
+              type: array
+              items: { type: string }
+            attachmentIds:
+              type: array
+              items: { type: string }
+            warnings:
+              type: array
+              items: { type: string }
+            error: { type: string, nullable: true }
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+
+    NotificationChannel:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string, example: "运维群机器人" }
+        type: { type: string, enum: [wecom, feishu, smtp] }
+        config:
+          type: object
+          description: 敏感字段（webhook 含 key、smtp 密码）响应中脱敏为 ***
+          properties:
+            webhook: { type: string, example: "***" }
+            secret: { type: string, example: "***" }
+            host: { type: string, example: "smtp.example.com" }
+            port: { type: integer, example: 465 }
+            from: { type: string, example: "wikidoc@example.com" }
+            username: { type: string }
+        enabled: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    NotificationChannelRequest:
+      type: object
+      required: [name, type, config]
+      properties:
+        name: { type: string }
+        type: { type: string, enum: [wecom, feishu, smtp] }
+        config: { type: object }
+        enabled: { type: boolean, default: true }
+
+    NotificationSubscription:
+      type: object
+      properties:
+        id: { type: string }
+        userId: { type: string }
+        targetType: { type: string, enum: [space, document] }
+        targetId: { type: string }
+        eventType:
+          type: string
+          enum: [document_published, document_updated, document_deleted, permission_granted]
+        channelType: { type: string, enum: [inbox, email, wecom, feishu] }
+        createdAt: { type: string, format: date-time }
+
+    NotificationSubscriptionRequest:
+      type: object
+      required: [targetType, targetId, eventType, channelType]
+      properties:
+        targetType: { type: string, enum: [space, document] }
+        targetId: { type: string }
+        eventType:
+          type: string
+          enum: [document_published, document_updated, document_deleted, permission_granted]
+        channelType: { type: string, enum: [inbox, email, wecom, feishu] }
+
+    NotificationLog:
+      type: object
+      properties:
+        id: { type: string }
+        channelId: { type: string, nullable: true }
+        eventType: { type: string }
+        status: { type: string, enum: [pending, sent, failed] }
+        error: { type: string, nullable: true }
+        retries: { type: integer, example: 0 }
+        payload: { type: object }
+        createdAt: { type: string, format: date-time }
+        sentAt: { type: string, format: date-time, nullable: true }
+
+    SettingsPublic:
+      type: object
+      properties:
+        siteName: { type: string, example: "企业知识库" }
+        defaultLocale: { type: string, enum: ["zh-CN", "en-US"] }
+        availableLocales:
+          type: array
+          items: { type: string, enum: ["zh-CN", "en-US"] }
+        availableThemes:
+          type: array
+          items: { $ref: '#/components/schemas/Theme' }
+        availableModes:
+          type: array
+          items: { $ref: '#/components/schemas/Mode' }
+        loginProviders:
+          type: array
+          items: { type: string, enum: [local, ldap, oidc] }
+        maxUploadBytes: { type: integer, example: 52428800 }
+
+    Settings:
+      type: object
+      description: 全量配置，敏感键（ldap.bindPassword / oidc.clientSecret / smtp.pass / 渠道 secret）响应中脱敏为 ***
+      properties:
+        siteName: { type: string }
+        defaultLocale: { type: string, enum: ["zh-CN", "en-US"] }
+        defaultTheme: { $ref: '#/components/schemas/Theme' }
+        defaultMode: { $ref: '#/components/schemas/Mode' }
+        auth:
+          type: object
+          properties:
+            allowLocalFallback: { type: boolean, description: LDAP 不可达时是否开放本地登录 }
+            sessionIdleMinutes: { type: integer, example: 120 }
+        ldap:
+          type: object
+          properties:
+            url: { type: string, example: "ldap://dc.example.com:389" }
+            bindDn: { type: string }
+            bindPassword: { type: string, example: "***" }
+            userBaseDn: { type: string, example: "OU=Employees,DC=example,DC=com" }
+            userFilter: { type: string, example: "(sAMAccountName={{username}})" }
+            groupBaseDn: { type: string }
+            groupFilter: { type: string, example: "(objectClass=group)" }
+            timeoutMs: { type: integer, example: 8000 }
+            enabled: { type: boolean }
+        oidc:
+          type: object
+          properties:
+            enabled: { type: boolean }
+            issuer: { type: string }
+            clientId: { type: string }
+            clientSecret: { type: string, example: "***" }
+            redirectUri: { type: string }
+            scope: { type: string, example: "openid profile email" }
+        smtp:
+          type: object
+          properties:
+            host: { type: string }
+            port: { type: integer }
+            secure: { type: boolean }
+            username: { type: string }
+            password: { type: string, example: "***" }
+            from: { type: string }
+        upload:
+          type: object
+          properties:
+            maxFileBytes: { type: integer, example: 52428800 }
+            allowedExtensions:
+              type: array
+              items: { type: string }
+
+    SettingsUpdateRequest:
+      type: object
+      description: 按 key 合并写入，未提交的键保持原值
+      properties:
+        siteName: { type: string }
+        defaultLocale: { type: string, enum: ["zh-CN", "en-US"] }
+        defaultTheme: { $ref: '#/components/schemas/Theme' }
+        defaultMode: { $ref: '#/components/schemas/Mode' }
+        auth: { type: object }
+        ldap: { type: object }
+        oidc: { type: object }
+        smtp: { type: object }
+        upload: { type: object }
+
+    ConnectivityTest:
+      type: object
+      properties:
+        ok: { type: boolean }
+        latencyMs: { type: integer, nullable: true, example: 42 }
+        error: { type: string, nullable: true }
+
+    AuditLog:
+      type: object
+      properties:
+        id: { type: string }
+        actorId: { type: string, nullable: true, description: null 表示系统动作 }
+        actorName: { type: string, nullable: true }
+        action: { type: string, example: "permission.update" }
+        objectType: { type: string, example: "document" }
+        objectId: { type: string }
+        detail: { type: object }
+        ip: { type: string }
+        createdAt: { type: string, format: date-time }
+
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, degraded], example: "ok" }
+        dbFile: { type: string, example: "/app/data/wikidoc.db" }
+        sqliteVersion: { type: string, example: "3.49.2" }
+        uptimeMs: { type: integer, example: 86400000 }
+        indexedDocs: { type: integer, example: 1287 }
+        pendingAclRebuild: { type: integer, example: 0 }
+
+    BackupResult:
+      type: object
+      properties:
+        file: { type: string, example: "/app/data/backup-20260928T100000.db" }
+        sizeBytes: { type: integer, example: 104857600 }
+        elapsedMs: { type: integer, example: 1200 }
+
+    LoginProviders:
+      type: object
+      properties:
+        local: { type: boolean, example: true }
+        ldap: { type: boolean, example: true }
+        oidc:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string, example: "企业统一认证" }
+              authorizeUrl: { type: string }
+
+paths:
+
+  # ---------------- auth ----------------
+  /auth/login:
+    post:
+      operationId: authLogin
+      tags: [auth]
+      summary: 账号密码登录（本地账号或 LDAP/AD 账号）
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: 登录成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/TokenPair'
+                          - type: object
+                            properties:
+                              user: { $ref: '#/components/schemas/User' }
+        '401':
+          description: 用户名或密码错误
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      code: { type: integer, example: 2002 }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '503':
+          description: LDAP 不可达
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      code: { type: integer, example: 5001 }
+
+  /auth/refresh:
+    post:
+      operationId: authRefresh
+      tags: [auth]
+      summary: 用 refresh token 换取新的 access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: 刷新成功，同时轮换 refresh token
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/TokenPair' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/logout:
+    post:
+      operationId: authLogout
+      tags: [auth]
+      summary: 注销当前会话并撤销 refresh token
+      responses:
+        '200':
+          description: 已注销
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me:
+    get:
+      operationId: authMe
+      tags: [auth]
+      summary: 获取当前登录用户、权限摘要与个性化设置
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          user: { $ref: '#/components/schemas/User' }
+                          isSuperAdmin: { type: boolean }
+                          settings: { $ref: '#/components/schemas/SettingsPublic' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/password:
+    post:
+      operationId: authChangePassword
+      tags: [auth]
+      summary: 修改本地账号密码（LDAP/OIDC 账号返回 400）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordChangeRequest' }
+      responses:
+        '200':
+          description: 修改成功，同时撤销该用户全部 refresh token
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/providers:
+    get:
+      operationId: authProviders
+      tags: [auth]
+      summary: 获取已启用的登录方式（免登录）
+      security: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/LoginProviders' }
+
+  /auth/oidc/authorize:
+    get:
+      operationId: authOidcAuthorize
+      tags: [auth]
+      summary: 发起 OIDC 授权跳转（openid-client 5.7.1，协议通用不绑厂商）
+      security: []
+      responses:
+        '302':
+          description: 重定向到 IdP 授权端点，state 与 nonce 写入短期 Cookie
+        '503':
+          description: 未启用 OIDC 或 IdP 不可达
+
+  /auth/oidc/callback:
+    get:
+      operationId: authOidcCallback
+      tags: [auth]
+      summary: OIDC 回调，校验 state 与 nonce 后签发令牌
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema: { type: string }
+        - name: state
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '302':
+          description: 校验通过，种入 refresh Cookie 并重定向回前端
+        '400':
+          description: state 或 nonce 校验失败
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      code: { type: integer, example: 2004 }
+
+  /auth/ldap/health:
+    get:
+      operationId: authLdapHealth
+      tags: [auth]
+      summary: 测试 LDAP/AD 连通性
+      responses:
+        '200':
+          description: 测试结果（HTTP 200，成败看 data.ok）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConnectivityTest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------- users ----------------
+  /users:
+    get:
+      operationId: userList
+      tags: [users]
+      summary: 用户列表（分页与关键字）
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+        - $ref: '#/components/parameters/Q'
+        - name: status
+          in: query
+          schema: { type: string, enum: [active, disabled] }
+        - name: authSource
+          in: query
+          schema: { type: string, enum: [local, ldap, oidc] }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: userCreate
+      tags: [users]
+      summary: 创建用户
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserCreateRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /users/{id}:
+    parameters: [{ $ref: '#/components/parameters/UserId' }]
+    get:
+      operationId: userGet
+      tags: [users]
+      summary: 用户详情
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: userUpdate
+      tags: [users]
+      summary: 更新用户
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UserUpdateRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/User' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: userDelete
+      tags: [users]
+      summary: 停用用户（软删除，保留审计与文档归属）
+      responses:
+        '200':
+          description: 已停用
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /users/{id}/reset-password:
+    parameters: [{ $ref: '#/components/parameters/UserId' }]
+    post:
+      operationId: userResetPassword
+      tags: [users]
+      summary: 管理员重置用户密码并强制下次登录修改
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetPasswordRequest' }
+      responses:
+        '200':
+          description: 已重置
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /users/{id}/groups:
+    parameters: [{ $ref: '#/components/parameters/UserId' }]
+    get:
+      operationId: userGroups
+      tags: [users]
+      summary: 查询用户所属组
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Group' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- groups ----------------
+  /groups:
+    get:
+      operationId: groupList
+      tags: [groups]
+      summary: 用户组列表（树形）
+      parameters:
+        - $ref: '#/components/parameters/Q'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Group' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: groupCreate
+      tags: [groups]
+      summary: 创建用户组
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupCreateRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Group' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /groups/sync:
+    post:
+      operationId: groupSyncLdap
+      tags: [groups]
+      summary: 从 AD/LDAP 全量同步组与成员（分页 1000/批，标记-清理法删除幽灵关系）
+      responses:
+        '200':
+          description: 同步完成
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/GroupSyncResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '503':
+          description: LDAP 不可达
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      code: { type: integer, example: 5001 }
+
+  /groups/{id}:
+    parameters: [{ $ref: '#/components/parameters/GroupId' }]
+    get:
+      operationId: groupGet
+      tags: [groups]
+      summary: 用户组详情
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Group' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: groupUpdate
+      tags: [groups]
+      summary: 更新用户组
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupCreateRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Group' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: groupDelete
+      tags: [groups]
+      summary: 删除用户组（同步触发 ACL 重算）
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /groups/{id}/members:
+    parameters: [{ $ref: '#/components/parameters/GroupId' }]
+    get:
+      operationId: groupMemberList
+      tags: [groups]
+      summary: 组成员列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/User' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: groupMemberAdd
+      tags: [groups]
+      summary: 批量添加组成员
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GroupMembersRequest' }
+      responses:
+        '200':
+          description: 已添加
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          added: { type: integer, example: 5 }
+                          skipped: { type: integer, example: 1 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /groups/{id}/members/{userId}:
+    parameters:
+      - $ref: '#/components/parameters/GroupId'
+      - name: userId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: groupMemberRemove
+      tags: [groups]
+      summary: 移除组成员
+      responses:
+        '200':
+          description: 已移除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- spaces ----------------
+  /spaces:
+    get:
+      operationId: spaceList
+      tags: [spaces]
+      summary: 空间列表（按当前用户可见性过滤）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Space' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: spaceCreate
+      tags: [spaces]
+      summary: 创建空间
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SpaceCreateRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Space' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /spaces/{id}:
+    parameters: [{ $ref: '#/components/parameters/SpaceId' }]
+    get:
+      operationId: spaceGet
+      tags: [spaces]
+      summary: 空间详情
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Space' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: spaceUpdate
+      tags: [spaces]
+      summary: 更新空间
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SpaceCreateRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Space' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: spaceDelete
+      tags: [spaces]
+      summary: 删除空间（软删除并级联其文档树）
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /spaces/{id}/tree:
+    parameters: [{ $ref: '#/components/parameters/SpaceId' }]
+    get:
+      operationId: spaceTree
+      tags: [spaces]
+      summary: 空间文档树（仅返回有权读取的节点）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        description: 嵌套树，children 递归
+                        items:
+                          allOf:
+                            - $ref: '#/components/schemas/DocumentSummary'
+                            - type: object
+                              properties:
+                                children:
+                                  type: array
+                                  items: { type: object }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- documents ----------------
+  /documents:
+    get:
+      operationId: documentList
+      tags: [documents]
+      summary: 文档列表（按空间或父文档过滤，权限已生效）
+      parameters:
+        - name: spaceId
+          in: query
+          schema: { type: string }
+        - name: parentId
+          in: query
+          schema: { type: string, description: 不传表示查空间根层 }
+        - name: status
+          in: query
+          schema: { type: string, enum: [draft, published, archived] }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/DocumentSummary' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      operationId: documentCreate
+      tags: [documents]
+      summary: 创建文档（同时写入首版本并增量更新检索索引）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DocumentCreateRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /documents/{id}:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: documentGet
+      tags: [documents]
+      summary: 文档详情（含 effectivePermission 与面包屑）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: documentUpdate
+      tags: [documents]
+      summary: 更新文档（每次保存生成新版本）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DocumentUpdateRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: 版本冲突（传入的 baseVersionNo 落后于当前版本）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      code: { type: integer, example: 4002 }
+    delete:
+      operationId: documentDelete
+      tags: [documents]
+      summary: 删除文档（软删除，级联子树）
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/move:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    post:
+      operationId: documentMove
+      tags: [documents]
+      summary: 移动文档并重排（触发 path 与 ACL 子树重算）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DocumentMoveRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '400':
+          description: 不允许移动到自身子树下
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      code: { type: integer, example: 1002 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /documents/{id}/publish:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    post:
+      operationId: documentPublish
+      tags: [documents]
+      summary: 发布文档（触发已订阅的通知投递）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/breadcrumb:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: documentBreadcrumb
+      tags: [documents]
+      summary: 文档面包屑路径
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/DocumentSummary' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/render:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: documentRender
+      tags: [documents]
+      summary: 获取服务端渲染并消毒后的 HTML 与自动目录
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DocumentRender' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/versions:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: versionList
+      tags: [versions]
+      summary: 文档版本列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/Version' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/attachments:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: documentAttachmentList
+      tags: [attachments]
+      summary: 文档附件列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Attachment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/drawings:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: drawingList
+      tags: [blocks]
+      summary: 文档内画板列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Drawing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: drawingCreate
+      tags: [blocks]
+      summary: 创建画板（自研 SVG 画板，落库前剔除 on* 事件属性）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DrawingCreateRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Drawing' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /documents/{id}/data-tables:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: dataTableList
+      tags: [blocks]
+      summary: 文档内多维表格列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/DataTable' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      operationId: dataTableCreate
+      tags: [blocks]
+      summary: 创建多维表格
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DataTableCreateRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DataTable' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------- versions ----------------
+  /versions/{id}:
+    parameters: [{ $ref: '#/components/parameters/VersionId' }]
+    get:
+      operationId: versionGet
+      tags: [versions]
+      summary: 版本详情（含该版本的完整 Markdown）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/VersionDetail' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /versions/{id}/restore:
+    parameters: [{ $ref: '#/components/parameters/VersionId' }]
+    post:
+      operationId: versionRestore
+      tags: [versions]
+      summary: 回滚到指定版本（不删除历史，生成一个新版本）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Document' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /versions/{id}/diff:
+    parameters: [{ $ref: '#/components/parameters/VersionId' }]
+    get:
+      operationId: versionDiff
+      tags: [versions]
+      summary: 版本差异对比
+      parameters:
+        - name: against
+          in: query
+          required: true
+          schema: { type: integer }
+          description: 对比的基准版本号，不传或与自身相同时返回空差异
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DiffResult' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- attachments ----------------
+  /attachments:
+    post:
+      operationId: attachmentUpload
+      tags: [attachments]
+      summary: 上传附件（扩展名白名单 + MIME 与魔数校验 + 50MB 上限）
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                documentId: { type: string, description: 可选，绑定到文档 }
+                kind: { type: string, enum: [image, file, drawing, import], default: file }
+      responses:
+        '201':
+          description: 上传成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Attachment' }
+        '400':
+          description: 文件类型不在白名单或超出大小限制
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      code: { type: integer, example: 1003 }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /attachments/{id}:
+    parameters: [{ $ref: '#/components/parameters/AttachmentId' }]
+    get:
+      operationId: attachmentGet
+      tags: [attachments]
+      summary: 附件元数据
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Attachment' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: attachmentDelete
+      tags: [attachments]
+      summary: 删除附件（上传者或管理权限）
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /attachments/{id}/content:
+    parameters: [{ $ref: '#/components/parameters/AttachmentId' }]
+    get:
+      operationId: attachmentDownload
+      tags: [attachments]
+      summary: "下载附件内容（鉴权后流式返回，强制 Content-Disposition: attachment）"
+      parameters:
+        - name: inline
+          in: query
+          schema: { type: boolean, default: false }
+          description: 图片为 true 时允许内联预览，仍受权限校验
+      responses:
+        '200':
+          description: 文件流
+          headers:
+            Content-Disposition:
+              schema: { type: string }
+            X-Content-Type-Options:
+              schema: { type: string, example: "nosniff" }
+          content:
+            application/octet-stream:
+              schema: { type: string, format: binary }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- search ----------------
+  /search:
+    get:
+      operationId: searchQuery
+      tags: [search]
+      summary: 全站全文检索（标题/正文/代码块，相关度排序 + 权限过滤）
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 1 }
+          description: |
+            检索词。应用层 bigram 预分词后走 FTS5 unicode61；长度小于 2 字符自动降级为 LIKE 并限制 50 条。
+            特殊字符会被转义，不会触发 FTS5 语法错误。
+        - name: spaceId
+          in: query
+          schema: { type: string }
+        - name: type
+          in: query
+          schema: { type: string, enum: [all, document, attachment] }
+          description: 检索范围，默认 all
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/SearchHit' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /search/suggest:
+    get:
+      operationId: searchSuggest
+      tags: [search]
+      summary: 标题前缀补全
+      parameters:
+        - $ref: '#/components/parameters/Q'
+        - name: limit
+          in: query
+          schema: { type: integer, default: 10, maximum: 20 }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/SuggestItem' }
+
+  /search/reindex:
+    post:
+      operationId: searchReindex
+      tags: [search]
+      summary: 重建检索索引
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                full:
+                  type: boolean
+                  default: true
+                  description: true 为全量重建，false 为补齐缺失条目
+      responses:
+        '200':
+          description: 重建完成
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ReindexResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------- permissions ----------------
+  /documents/{id}/permissions:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      operationId: documentPermissionGet
+      tags: [permissions]
+      summary: 获取文档 ACL
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          entries:
+                            type: array
+                            items: { $ref: '#/components/schemas/AclEntry' }
+                          inheritedFrom:
+                            type: array
+                            description: 来自祖先或空间的继承条目，只读
+                            items: { $ref: '#/components/schemas/AclEntry' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: documentPermissionPut
+      tags: [permissions]
+      summary: 整体替换文档 ACL（提交即全量覆盖，触发 doc_acl_flat 重算）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AclPutRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          entries:
+                            type: array
+                            items: { $ref: '#/components/schemas/AclEntry' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /spaces/{id}/permissions:
+    parameters: [{ $ref: '#/components/parameters/SpaceId' }]
+    get:
+      operationId: spacePermissionGet
+      tags: [permissions]
+      summary: 获取空间 ACL
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          entries:
+                            type: array
+                            items: { $ref: '#/components/schemas/AclEntry' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: spacePermissionPut
+      tags: [permissions]
+      summary: 整体替换空间 ACL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AclPutRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          entries:
+                            type: array
+                            items: { $ref: '#/components/schemas/AclEntry' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /permissions/effective:
+    get:
+      operationId: permissionEffective
+      tags: [permissions]
+      summary: 调试用，返回某用户对某文档的权限解析链路
+      parameters:
+        - name: documentId
+          in: query
+          required: true
+          schema: { type: string }
+        - name: userId
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/EffectivePermission' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------- blocks: drawings ----------------
+  /drawings/{id}:
+    parameters: [{ $ref: '#/components/parameters/DrawingId' }]
+    get:
+      operationId: drawingGet
+      tags: [blocks]
+      summary: 画板详情
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Drawing' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: drawingUpdate
+      tags: [blocks]
+      summary: 更新画板图元与视图状态
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DrawingCreateRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Drawing' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: drawingDelete
+      tags: [blocks]
+      summary: 删除画板
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- blocks: data tables ----------------
+  /data-tables/{id}:
+    parameters: [{ $ref: '#/components/parameters/TableId' }]
+    get:
+      operationId: dataTableGet
+      tags: [blocks]
+      summary: 多维表格详情（含行数据）
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/DataTable'
+                          - type: object
+                            properties:
+                              rows:
+                                type: array
+                                items: { $ref: '#/components/schemas/DataTableRow' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      operationId: dataTableUpdate
+      tags: [blocks]
+      summary: 更新表格名称与列定义
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DataTableCreateRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DataTable' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: dataTableDelete
+      tags: [blocks]
+      summary: 删除多维表格及其行
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /data-tables/{id}/rows:
+    parameters: [{ $ref: '#/components/parameters/TableId' }]
+    post:
+      operationId: dataTableRowUpsert
+      tags: [blocks]
+      summary: 批量新增或更新行（带 id 为更新，无 id 为新增）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RowsUpsertRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/DataTableRow' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /data-tables/{id}/rows/{rowId}:
+    parameters:
+      - $ref: '#/components/parameters/TableId'
+      - $ref: '#/components/parameters/RowId'
+    patch:
+      operationId: dataTableRowUpdate
+      tags: [blocks]
+      summary: 更新单行单元格数据
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                data: { type: object }
+                sortOrder: { type: integer }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/DataTableRow' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: dataTableRowDelete
+      tags: [blocks]
+      summary: 删除行
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- import ----------------
+  /import/docx:
+    post:
+      operationId: importDocx
+      tags: [import]
+      summary: 导入 Word 文档（mammoth 出 HTML，turndown 转 Markdown，sanitize-html 消毒后落库）
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, targetSpaceId]
+              properties:
+                file: { type: string, format: binary }
+                targetSpaceId: { type: string }
+                parentId: { type: string, nullable: true }
+      responses:
+        '202':
+          description: 任务已接受，返回任务 ID
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ImportJob' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /import/xlsx:
+    post:
+      operationId: importXlsx
+      tags: [import]
+      summary: 导入 Excel（exceljs 4.4.0，每个工作表转一篇文档或一张多维表格）
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, targetSpaceId]
+              properties:
+                file: { type: string, format: binary }
+                targetSpaceId: { type: string }
+                parentId: { type: string, nullable: true }
+                asDataTable:
+                  type: boolean
+                  default: false
+                  description: true 时转为多维表格，false 时转为 Markdown 表格文档
+      responses:
+        '202':
+          description: 任务已接受
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ImportJob' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /import/jobs:
+    get:
+      operationId: importJobList
+      tags: [import]
+      summary: 导入任务列表
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/ImportJob' }
+
+  /import/jobs/{id}:
+    parameters: [{ $ref: '#/components/parameters/JobId' }]
+    get:
+      operationId: importJobGet
+      tags: [import]
+      summary: 导入任务详情（含成功产物 ID 与失败原因）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ImportJob' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # ---------------- notifications ----------------
+  /notifications/channels:
+    get:
+      operationId: channelList
+      tags: [notifications]
+      summary: 通知渠道列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/NotificationChannel' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      operationId: channelCreate
+      tags: [notifications]
+      summary: 创建通知渠道（wecom 群机器人 / feishu 自定义机器人 / smtp）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationChannelRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/NotificationChannel' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /notifications/channels/{id}:
+    parameters: [{ $ref: '#/components/parameters/ChannelId' }]
+    patch:
+      operationId: channelUpdate
+      tags: [notifications]
+      summary: 更新通知渠道
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationChannelRequest' }
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/NotificationChannel' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      operationId: channelDelete
+      tags: [notifications]
+      summary: 删除通知渠道
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications/channels/{id}/test:
+    parameters: [{ $ref: '#/components/parameters/ChannelId' }]
+    post:
+      operationId: channelTest
+      tags: [notifications]
+      summary: 发送一条测试消息验证渠道配置
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                recipient: { type: string, description: smtp 渠道必填收件人 }
+      responses:
+        '200':
+          description: 测试结果（HTTP 200，成败看 data.ok）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConnectivityTest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /notifications/subscriptions:
+    get:
+      operationId: subscriptionList
+      tags: [notifications]
+      summary: 我的订阅列表
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/NotificationSubscription' }
+    post:
+      operationId: subscriptionCreate
+      tags: [notifications]
+      summary: 创建订阅（按空间或文档订阅事件）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/NotificationSubscriptionRequest' }
+      responses:
+        '201':
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/NotificationSubscription' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /notifications/subscriptions/{id}:
+    parameters: [{ $ref: '#/components/parameters/SubscriptionId' }]
+    delete:
+      operationId: subscriptionDelete
+      tags: [notifications]
+      summary: 删除订阅
+      responses:
+        '200':
+          description: 已删除
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Ok' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications/logs:
+    get:
+      operationId: notificationLogList
+      tags: [notifications]
+      summary: 通知投递日志
+      parameters:
+        - name: status
+          in: query
+          schema: { type: string, enum: [pending, sent, failed] }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/NotificationLog' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /notifications/dispatch:
+    post:
+      operationId: notificationDispatch
+      tags: [notifications]
+      summary: 手动触发一次通知投递（用于补发或验证订阅链路）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [eventType, targetType, targetId]
+              properties:
+                eventType:
+                  type: string
+                  enum: [document_published, document_updated, document_deleted, permission_granted]
+                targetType: { type: string, enum: [space, document] }
+                targetId: { type: string }
+      responses:
+        '200':
+          description: 已触发
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          dispatched: { type: integer, example: 3 }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------- settings ----------------
+  /settings:
+    get:
+      operationId: settingsGet
+      tags: [settings]
+      summary: 获取完整站点配置（敏感字段脱敏为 ***）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Settings' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    put:
+      operationId: settingsUpdate
+      tags: [settings]
+      summary: 更新站点配置（按 key 合并写入，敏感字段 AES-256-GCM 加密存储）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SettingsUpdateRequest' }
+      responses:
+        '200':
+          description: 已更新
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Settings' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /settings/public:
+    get:
+      operationId: settingsPublic
+      tags: [settings]
+      summary: 获取公开配置（免登录，用于登录页与前端初始化）
+      security: []
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/SettingsPublic' }
+
+  /settings/test-ldap:
+    post:
+      operationId: settingsTestLdap
+      tags: [settings]
+      summary: 用当前保存的 LDAP 配置做一次连通性测试
+      responses:
+        '200':
+          description: 测试结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConnectivityTest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /settings/test-smtp:
+    post:
+      operationId: settingsTestSmtp
+      tags: [settings]
+      summary: 用当前保存的 SMTP 配置做一次连通性测试
+      responses:
+        '200':
+          description: 测试结果
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ConnectivityTest' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  # ---------------- admin ----------------
+  /admin/health:
+    get:
+      operationId: adminHealth
+      tags: [admin]
+      summary: 健康检查（含 SQLite 版本与索引文档数）
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Health' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/audit-logs:
+    get:
+      operationId: auditLogList
+      tags: [admin]
+      summary: 审计日志（不可通过任何接口删除）
+      parameters:
+        - name: actorId
+          in: query
+          schema: { type: string }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: objectType
+          in: query
+          schema: { type: string }
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: 成功
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/PagedMeta'
+                          - type: object
+                            properties:
+                              items:
+                                type: array
+                                items: { $ref: '#/components/schemas/AuditLog' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/backup:
+    post:
+      operationId: adminBackup
+      tags: [admin]
+      summary: 在线热备份（SQLite VACUUM INTO，一致性由引擎保证）
+      responses:
+        '200':
+          description: 备份完成
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/BackupResult' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+
+  /admin/acl/rebuild:
+    post:
+      operationId: adminAclRebuild
+      tags: [admin]
+      summary: 强制全量重算权限物化表 doc_acl_flat
+      responses:
+        '200':
+          description: 重算完成
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Envelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          documents: { type: integer, example: 1287 }
+                          rows: { type: integer, example: 25431 }
+                          elapsedMs: { type: integer, example: 1800 }
+        '403': { $ref: '#/components/responses/Forbidden' }

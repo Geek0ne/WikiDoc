@@ -1,0 +1,43 @@
+# =============================================================================
+# WikiDoc 单容器编排。使用:docker compose up -d --build
+#
+# 说明:
+#   - LDAP / OIDC SSO / 通知渠道(企业微信、飞书、SMTP)均在 Web 设置页
+#     (管理后台 → 系统设置)配置,无需任何环境变量;
+#   - 内网反向代理示例见 deploy/nginx.example.conf;
+#   - 首次启动若提示 /data 无写权限,执行: chown -R 1000:1000 ./data
+#     (容器以 node 用户 uid=1000 运行)。
+# =============================================================================
+services:
+  wikidoc:
+    build: .
+    image: wikidoc:latest
+    container_name: wikidoc
+    restart: unless-stopped
+    ports:
+      # 宿主机端口 : 容器端口。改对外端口只动左侧,容器内固定 3000
+      - "8080:3000"
+    volumes:
+      # 全部持久化数据(SQLite 库、上传附件、备份、主密钥)都在 /data
+      - ./data:/data
+    environment:
+      # 敏感配置加密主密钥:留空则由 entrypoint 首次启动自动生成,
+      # 并持久化到 /data/.master_key;也可自行提供 64 位 hex:
+      #   openssl rand -hex 32
+      WIKIDOC_MASTER_KEY: ""
+      # 对外访问地址,用于 SSO 回调与通知链接拼接;反代环境务必设置,例如:
+      # WIKIDOC_PUBLIC_URL: "http://wiki.example.internal"
+      # 反代终止 HTTPS(对外 https)时设为 true,将同时启用 Cookie Secure 与 HSTS:
+      # WIKIDOC_COOKIE_SECURE: "false"
+      # 首次初始化的管理员密码(仅 users 表为空时生效),默认 Admin@12345:
+      # WIKIDOC_ADMIN_PASSWORD: "Admin@12345"
+      # 令牌签名密钥。不设置则每次重启随机生成,重启后全员登录态失效;
+      # 重启频繁或多实例部署建议固定:
+      # WIKIDOC_JWT_SECRET: ""
+      # WIKIDOC_JWT_REFRESH_SECRET: ""
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s

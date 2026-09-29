@@ -14,3 +14,7 @@ uploads/
 .vscode/
 coverage/
 *.tsbuildinfo
+
+# 冒烟测试临时产物
+.smoke/
+*.smoke*
