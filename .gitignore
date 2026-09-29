@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+*.log
+.env
+.env.local
+data/
+*.db
+*.db-wal
+*.db-shm
+uploads/
+.DS_Store
+.workbuddy/
+.vscode/
+coverage/
+*.tsbuildinfo
