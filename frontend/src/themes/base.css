@@ -1,0 +1,359 @@
+/**
+ * WikiDoc 主题基线。
+ * 通过 <html data-theme="light|dark"> 与 <html data-accent="default|forest|sunset">
+ * 两个属性驱动全部颜色变量，Tailwind 类只引用变量、不携带具体色值。
+ */
+
+/* ------------------------------------------------------------------ */
+/* 亮色主题（清爽白）                                                   */
+/* ------------------------------------------------------------------ */
+:root {
+  --bg: #f7f8fa;
+  --bg-elevated: #ffffff;
+  --bg-hover: #eef0f4;
+  --bg-sunken: #f0f2f5;
+  --text: #1a1d23;
+  --text-secondary: #59616d;
+  --text-muted: #8a92a0;
+  --border: #e2e5ea;
+  --border-strong: #cdd2da;
+
+  --primary: #2f6fce;
+  --primary-hover: #2a63b8;
+  --primary-fg: #ffffff;
+  --primary-soft: rgba(47, 111, 206, 0.1);
+  --primary-soft-border: rgba(47, 111, 206, 0.28);
+
+  --danger: #c93b3b;
+  --danger-soft: rgba(201, 59, 59, 0.1);
+  --warning: #b97d17;
+  --warning-soft: rgba(185, 125, 23, 0.12);
+  --success: #2e8a55;
+  --success-soft: rgba(46, 138, 85, 0.12);
+
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 14px rgba(15, 23, 42, 0.06);
+  --shadow-overlay: 0 4px 10px rgba(15, 23, 42, 0.07), 0 16px 40px rgba(15, 23, 42, 0.12);
+  --focus-ring: 0 0 0 3px rgba(47, 111, 206, 0.28);
+
+  --radius: 8px;
+  --radius-lg: 10px;
+
+  color-scheme: light;
+}
+
+/* ------------------------------------------------------------------ */
+/* 暗色主题（近黑不刺眼）                                               */
+/* ------------------------------------------------------------------ */
+[data-theme='dark'] {
+  --bg: #0f1115;
+  --bg-elevated: #161a20;
+  --bg-hover: #1d222b;
+  --bg-sunken: #0c0e12;
+  --text: #e7eaf0;
+  --text-secondary: #9aa3b2;
+  --text-muted: #666f7e;
+  --border: #262c36;
+  --border-strong: #333b48;
+
+  --primary: #5b93dd;
+  --primary-hover: #6da2e8;
+  --primary-fg: #0d1117;
+  --primary-soft: rgba(91, 147, 221, 0.14);
+  --primary-soft-border: rgba(91, 147, 221, 0.35);
+
+  --danger: #e06060;
+  --danger-soft: rgba(224, 96, 96, 0.14);
+  --warning: #d99a3d;
+  --warning-soft: rgba(217, 154, 61, 0.14);
+  --success: #4fae78;
+  --success-soft: rgba(79, 174, 120, 0.14);
+
+  --shadow: 0 0 0 1px rgba(255, 255, 255, 0.03), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-overlay: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 16px 48px rgba(0, 0, 0, 0.55);
+  --focus-ring: 0 0 0 3px rgba(91, 147, 221, 0.35);
+
+  color-scheme: dark;
+}
+
+/* ------------------------------------------------------------------ */
+/* 强调色变体：森林 / 日落（亮暗两套各调亮度）                           */
+/* ------------------------------------------------------------------ */
+[data-accent='forest'] {
+  --primary: #2e8a5c;
+  --primary-hover: #27784f;
+  --primary-soft: rgba(46, 138, 92, 0.1);
+  --primary-soft-border: rgba(46, 138, 92, 0.3);
+  --focus-ring: 0 0 0 3px rgba(46, 138, 92, 0.28);
+}
+[data-theme='dark'][data-accent='forest'] {
+  --primary: #57b183;
+  --primary-hover: #67c091;
+  --primary-soft: rgba(87, 177, 131, 0.14);
+  --primary-soft-border: rgba(87, 177, 131, 0.35);
+  --focus-ring: 0 0 0 3px rgba(87, 177, 131, 0.32);
+}
+
+[data-accent='sunset'] {
+  --primary: #cf6b34;
+  --primary-hover: #bd5f2c;
+  --primary-soft: rgba(207, 107, 52, 0.1);
+  --primary-soft-border: rgba(207, 107, 52, 0.3);
+  --focus-ring: 0 0 0 3px rgba(207, 107, 52, 0.28);
+}
+[data-theme='dark'][data-accent='sunset'] {
+  --primary: #e08b57;
+  --primary-hover: #e99b69;
+  --primary-soft: rgba(224, 139, 87, 0.14);
+  --primary-soft-border: rgba(224, 139, 87, 0.35);
+  --focus-ring: 0 0 0 3px rgba(224, 139, 87, 0.32);
+}
+
+/* ------------------------------------------------------------------ */
+/* 基础元素                                                           */
+/* ------------------------------------------------------------------ */
+* {
+  border-color: var(--border);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 6px;
+}
+
+/* 滚动条：细而低调 */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: content-box;
+  border: 2px solid transparent;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::selection {
+  background: var(--primary-soft);
+}
+
+/* ------------------------------------------------------------------ */
+/* Markdown 正文渲染（.wiki-prose）                                    */
+/* ------------------------------------------------------------------ */
+.wiki-prose {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.75;
+  word-break: break-word;
+}
+.wiki-prose h1,
+.wiki-prose h2,
+.wiki-prose h3,
+.wiki-prose h4 {
+  font-weight: 600;
+  line-height: 1.35;
+  margin: 1.6em 0 0.6em;
+  scroll-margin-top: 72px;
+}
+.wiki-prose h1:first-child,
+.wiki-prose h2:first-child,
+.wiki-prose h3:first-child {
+  margin-top: 0;
+}
+.wiki-prose h1 {
+  font-size: 1.75em;
+  letter-spacing: -0.01em;
+  padding-bottom: 0.35em;
+  border-bottom: 1px solid var(--border);
+}
+.wiki-prose h2 {
+  font-size: 1.4em;
+  letter-spacing: -0.01em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.wiki-prose h3 {
+  font-size: 1.17em;
+}
+.wiki-prose h4 {
+  font-size: 1.05em;
+}
+.wiki-prose p {
+  margin: 0.75em 0;
+}
+.wiki-prose a {
+  color: var(--primary);
+  text-decoration: none;
+}
+.wiki-prose a:hover {
+  text-decoration: underline;
+}
+.wiki-prose ul,
+.wiki-prose ol {
+  margin: 0.6em 0;
+  padding-left: 1.6em;
+}
+.wiki-prose ul {
+  list-style: disc;
+}
+.wiki-prose ol {
+  list-style: decimal;
+}
+.wiki-prose li {
+  margin: 0.25em 0;
+}
+.wiki-prose li > ul,
+.wiki-prose li > ol {
+  margin: 0.2em 0;
+}
+.wiki-prose blockquote {
+  margin: 1em 0;
+  padding: 0.4em 1em;
+  border-left: 3px solid var(--primary-soft-border);
+  background: var(--bg-hover);
+  border-radius: 0 6px 6px 0;
+  color: var(--text-secondary);
+}
+.wiki-prose blockquote p {
+  margin: 0.3em 0;
+}
+.wiki-prose code {
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  font-size: 0.875em;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+}
+.wiki-prose pre {
+  margin: 1em 0;
+  padding: 0;
+  background: transparent;
+  border-radius: 8px;
+  overflow: hidden;
+}
+.wiki-prose pre code {
+  display: block;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9em 1em;
+  overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.wiki-prose table {
+  width: 100%;
+  margin: 1em 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.wiki-prose th,
+.wiki-prose td {
+  border: 1px solid var(--border);
+  padding: 0.45em 0.8em;
+  text-align: left;
+}
+.wiki-prose th {
+  background: var(--bg-hover);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.wiki-prose tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
+}
+.wiki-prose img {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.wiki-prose hr {
+  margin: 1.6em 0;
+  border: none;
+  border-top: 1px solid var(--border);
+}
+.wiki-prose mark {
+  background: var(--warning-soft);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+/* 代码块容器（带复制按钮与语言角标） */
+.code-block {
+  position: relative;
+  margin: 1em 0;
+}
+.code-block .code-lang {
+  position: absolute;
+  top: 8px;
+  right: 44px;
+  font-size: 11px;
+  color: var(--text-muted);
+  user-select: none;
+}
+.code-block .code-copy {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.code-block .code-copy:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+/* ------------------------------------------------------------------ */
+/* 动效可达性：偏好减弱动效时关闭过渡与动画                             */
+/* ------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
