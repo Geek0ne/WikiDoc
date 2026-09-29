@@ -2,6 +2,7 @@ import MarkdownIt from 'markdown-it';
 // 按需引入常用语言集合，避免全量包把 chunk 撑到 1MB+
 import hljs from 'highlight.js/lib/common';
 import DOMPurify from 'dompurify';
+import { getDrawing } from '../api/drawings';
 
 /**
  * Markdown 渲染管线：markdown-it → highlight.js → DOMPurify 消毒。
@@ -32,11 +33,22 @@ function escapeHtml(s: string): string {
   return s.replace(ESCAPE_RE, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
 }
 
-/** 重写 fenced 渲染：容器 + 语言角标 + 复制按钮 */
+/** 重写 fenced 渲染：容器 + 语言角标 + 复制按钮；drawing 围栏输出嵌入占位 */
 md.renderer.rules.fence = (tokens, idx, options) => {
   const token = tokens[idx];
   if (!token) return '';
   const info = (token.info || '').trim().split(/\s+/)[0] || '';
+
+  // ```drawing:12``` → 画板嵌入占位，SVG 由 bindDrawingEmbeds 异步注入
+  const drawingMatch = /^drawing:(\d+)$/.exec(info);
+  if (drawingMatch) {
+    return (
+      `<div class="drawing-embed" data-drawing-id="${drawingMatch[1]}">` +
+      `<div class="drawing-embed-loading">绘图 #${drawingMatch[1]} 加载中…</div>` +
+      `</div>`
+    );
+  }
+
   const highlighted = options.highlight?.(token.content, info, '') ?? '';
   const body = highlighted || escapeHtml(token.content);
   return (
@@ -128,4 +140,70 @@ export function bindCodeCopy(container: HTMLElement): () => void {
   };
   container.addEventListener('click', handler);
   return () => container.removeEventListener('click', handler);
+}
+
+/** 从 markdown 源文本解析标题目录（编辑态不依赖预览 DOM） */
+export function parseMarkdownToc(source: string): TocItem[] {
+  const items: TocItem[] = [];
+  const seen = new Map<string, number>();
+  let inFence = false;
+  for (const line of (source ?? '').split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    if (inFence) continue;
+    const match = /^(#{1,4})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (!match?.[1] || !match[2]) continue;
+    const level = match[1].length;
+    const text = match[2].replace(/[*_`~]/g, '').trim();
+    if (!text) continue;
+    const base = text.replace(/\s+/g, '-').replace(ANCHOR_RE, '-') || 'section';
+    const count = seen.get(base) ?? 0;
+    seen.set(base, count + 1);
+    items.push({ id: count === 0 ? base : `${base}-${count}`, text, level });
+  }
+  return items;
+}
+
+/**
+ * 把渲染结果中的绘图占位替换为真实 SVG。
+ * 服务端返回的 SVG 源码先经 DOMPurify 消毒再注入。
+ */
+export function bindDrawingEmbeds(container: HTMLElement): () => void {
+  const controllers = new Map<number, AbortController>();
+  const nodes = Array.from(container.querySelectorAll<HTMLElement>('.drawing-embed[data-drawing-id]'));
+
+  nodes.forEach((node) => {
+    const id = Number(node.dataset.drawingId);
+    if (!Number.isInteger(id) || controllers.has(id)) return;
+    const controller = new AbortController();
+    controllers.set(id, controller);
+    void getDrawing(id)
+      .then(({ drawing }) => {
+        if (controller.signal.aborted || !node.isConnected) return;
+        if (!drawing.svg) {
+          node.innerHTML = '<div class="drawing-embed-missing">绘图内容为空</div>';
+          return;
+        }
+        const clean = DOMPurify.sanitize(drawing.svg, { USE_PROFILES: { svg: true, svgFilters: true } });
+        node.innerHTML = clean;
+        const svg = node.querySelector('svg');
+        if (svg) {
+          svg.removeAttribute('width');
+          svg.removeAttribute('height');
+          svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+          svg.style.width = '100%';
+          svg.style.height = 'auto';
+          svg.style.maxWidth = `${drawing.width || 800}px`;
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted && node.isConnected) {
+          node.innerHTML = `<div class="drawing-embed-missing">绘图 #${id} 无法加载</div>`;
+        }
+      });
+  });
+
+  return () => {
+    controllers.forEach((c) => c.abort());
+    controllers.clear();
+  };
 }

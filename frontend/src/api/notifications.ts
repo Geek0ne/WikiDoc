@@ -12,7 +12,7 @@ export async function listChannels(): Promise<{ items: NotificationChannel[] }> 
 export async function createChannel(input: {
   name: string;
   type: 'wecom' | 'feishu' | 'email';
-  config: Record<string, string>;
+  config: { webhook?: string; recipients?: string[] };
   enabled?: boolean;
 }): Promise<{ channel: NotificationChannel }> {
   return request<{ channel: NotificationChannel }>('/api/notifications/channels', {
@@ -23,7 +23,7 @@ export async function createChannel(input: {
 
 export async function updateChannel(
   id: number,
-  input: { name?: string; config?: Record<string, string>; enabled?: boolean }
+  input: { name?: string; config?: { webhook?: string; recipients?: string[] }; enabled?: boolean }
 ): Promise<{ channel: NotificationChannel }> {
   return request<{ channel: NotificationChannel }>(`/api/notifications/channels/${id}`, {
     method: 'PUT',

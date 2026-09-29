@@ -219,21 +219,22 @@ export interface ImportJob {
   finished_at: string | null;
 }
 
+/** 个人订阅项（channel.service SubscriptionInput，camelCase） */
 export interface NotificationSubscription {
-  id: number;
-  user_id: number;
-  channel_id: number;
-  event_type: string;
-  enabled: number;
+  channelId: number;
+  eventType: string;
+  enabled: boolean;
 }
 
 export interface NotificationChannel {
   id: number;
   name: string;
   type: 'wecom' | 'feishu' | 'email';
-  config: Record<string, string>;
-  enabled: number;
-  created_at: string;
+  /** 企微/飞书用 webhook，邮件用 recipients 地址数组 */
+  config: { webhook?: string; recipients?: string[] };
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AuditLogRow {
@@ -254,4 +255,57 @@ export interface SitePublicSettings {
   availableLocales: string[];
   themes: string[];
   loginProviders: LoginProviders;
+}
+
+/** 多维表格列定义（datatable.service DataTableColumn） */
+export interface DataTableColumn {
+  key: string;
+  title: string;
+  type: 'text' | 'number' | 'date' | 'select' | 'user';
+  options?: string[];
+  width?: number;
+}
+
+export interface DataTableRow {
+  id: number;
+  cells: Record<string, unknown>;
+  sort_order: number;
+}
+
+export interface DataTableView {
+  id: number;
+  document_id: number | null;
+  name: string;
+  columns: DataTableColumn[];
+  author_id: number;
+  created_at: string;
+  updated_at: string;
+}
+
+/** SVG 画板（drawing.service DrawingRow） */
+export interface Drawing {
+  id: number;
+  document_id: number | null;
+  title: string;
+  svg: string;
+  width: number;
+  height: number;
+  author_id: number;
+  author_name: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BackupFile {
+  file: string;
+  size: number;
+  created_at: string;
+}
+
+/** LDAP 组同步结果（group.service LdapSyncResult） */
+export interface GroupSyncResult {
+  groups: number;
+  users: number;
+  memberships: number;
+  skipped: string[];
 }

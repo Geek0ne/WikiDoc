@@ -345,6 +345,26 @@ textarea {
   background: var(--bg-hover);
 }
 
+/* 画板嵌入块：异步注入 SVG 前后的占位与容器 */
+.wiki-prose .drawing-embed {
+  margin: 1rem 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elevated);
+  overflow-x: auto;
+}
+.wiki-prose .drawing-embed svg {
+  display: block;
+}
+.wiki-prose .drawing-embed-loading,
+.wiki-prose .drawing-embed-missing {
+  padding: 28px 0;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
 /* ------------------------------------------------------------------ */
 /* 动效可达性：偏好减弱动效时关闭过渡与动画                             */
 /* ------------------------------------------------------------------ */
