@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Navigate, NavLink, useLocation } from 'react-router-dom';
-import { Bell, Landmark, Palette, ScrollText, ShieldCheck, Fingerprint, UserCog, Users } from 'lucide-react';
+import { Bell, Database, Landmark, Palette, ScrollText, ShieldCheck, Fingerprint, UserCog, Users } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useT, type TKey } from '../../i18n';
 import { useAuthStore } from '../../stores/auth';
@@ -12,6 +12,7 @@ import SsoPage from './SsoPage';
 import NotificationsPage from './NotificationsPage';
 import PermissionsPage from './PermissionsPage';
 import AuditPage from './AuditPage';
+import BackupPage from './BackupPage';
 
 /**
  * 设置区：左侧模块导航 + 右侧模块页。
@@ -27,6 +28,7 @@ const MODULES: { path: string; icon: ReactNode; labelKey: TKey; adminOnly: boole
   { path: 'sso', icon: <Fingerprint size={14} aria-hidden />, labelKey: 'settings.sso', adminOnly: true },
   { path: 'permissions', icon: <ShieldCheck size={14} aria-hidden />, labelKey: 'settings.permissions', adminOnly: true },
   { path: 'audit', icon: <ScrollText size={14} aria-hidden />, labelKey: 'settings.audit', adminOnly: true },
+  { path: 'backup', icon: <Database size={14} aria-hidden />, labelKey: 'settings.backup', adminOnly: true },
 ];
 
 const PAGE_BY_PATH: Record<string, ReactNode> = {
@@ -38,6 +40,7 @@ const PAGE_BY_PATH: Record<string, ReactNode> = {
   sso: <SsoPage />,
   permissions: <PermissionsPage />,
   audit: <AuditPage />,
+  backup: <BackupPage />,
 };
 
 /** 设置区路由：/settings/* 按子路径渲染对应模块 */
