@@ -75,6 +75,244 @@ environment:
 
 LDAP / OIDC / 通知渠道等运行期配置存于数据库 `site_settings` 表，管理员在 Web 设置页修改后即时生效，无需环境变量。
 
+## 部署指南
+
+> 本章覆盖从零部署到可交付使用的全过程。**首次部署请务必走完「验收清单」**，涉及认证、检索、导入、通知四条核心链路的实际连通性，这些是仅靠 `build` 通过无法证明的。
+
+### 1. 部署前准备
+
+| 检查项 | 要求 | 检查命令 |
+| --- | --- | --- |
+| Docker 引擎 | 20.10 及以上 | `docker --version` |
+| Compose 插件 | v2 及以上 | `docker compose version` |
+| 磁盘空间 | 建议 ≥ 5GB 可用 | `df -h` |
+| 端口占用 | 8080 未被占用（可改） | `ss -tlnp \| grep 8080` |
+| 数据目录权限 | `./data` 可被 uid 1000 写入 | 见下方说明 |
+
+容器以非 root 用户 `node`（uid 1000）运行。**首次部署先手工创建数据目录并赋权**，避免 Compose 自动以 root 创建后容器无写权限：
+
+```bash
+mkdir -p ./data
+chown -R 1000:1000 ./data
+```
+
+若环境不支持 `chown`（如部分 Windows 共享目录），改用 Docker 命名卷挂载，参见最后一节「数据目录权限报错」。
+
+### 2. 标准部署（Docker Compose）
+
+```bash
+git clone <本仓库地址> wikidoc && cd wikidoc
+mkdir -p ./data && sudo chown -R 1000:1000 ./data
+docker compose up -d --build
+```
+
+首次构建需拉取依赖并编译前后端，耗时数分钟。完成后：
+
+```bash
+docker compose ps              # 等待 STATUS 变为 Up (healthy)
+docker compose logs -f --tail=100   # 查看启动日志
+```
+
+健康检查每 30 秒探测一次 `/api/health`，`healthy` 表示服务已真正可用（而非仅容器启动）。随后浏览器访问 `http://<主机IP>:8080`。
+
+### 3. 生产环境必做的三项配置
+
+以下三项不配置服务也能跑，但会在生产环境出问题，建议部署时就显式设定：
+
+```yaml
+# docker-compose.yml → services.wikidoc.environment
+environment:
+  WIKIDOC_JWT_SECRET: "<openssl rand -hex 32 的输出>"
+  WIKIDOC_JWT_REFRESH_SECRET: "<再生成一个不同的值>"
+  WIKIDOC_PUBLIC_URL: "http://wiki.corp.local"   # 反代后填对外地址
+```
+
+- **JWT 两个密钥不设置时，容器每次重启都会重新随机生成，导致所有人登录态失效**。生成方式：`openssl rand -hex 32`
+- **反代或域名访问时必须设置 `WIKIDOC_PUBLIC_URL`**，否则 SSO 回调地址与通知消息中的链接会指向默认的 `http://localhost:3000`
+- 密钥建议写入 `.env` 文件并在 compose 的 service 下增加 `env_file: - .env`（注意：Compose 不会自动把 `.env` 注入容器，必须显式声明 `env_file`）；或直接填写在 `environment` 中
+
+### 4. 反向代理与 HTTPS
+
+内网 HTTP 场景可直连容器端口，无需反代。如需域名访问或终止 HTTPS：
+
+```bash
+cp deploy/nginx.example.conf /etc/nginx/conf.d/wikidoc.conf
+# 按实际修改 server_name 与 proxy_pass
+nginx -t && nginx -s reload
+```
+
+反代终止 TLS（对外 HTTPS）时，必须同时设置：
+
+```yaml
+WIKIDOC_COOKIE_SECURE: "true"        # 启用 Cookie Secure + HSTS
+WIKIDOC_PUBLIC_URL: "https://wiki.corp.local"
+```
+
+服务端已开启 `trust proxy`，Nginx 透传 `X-Forwarded-*` 后应用可获取真实客户端 IP。上传体积注意两层限制：应用层单文件 50MB，反代侧示例已放宽到 100m，不要小于应用层限制。
+
+### 5. 内网离线部署
+
+镜像构建需要联网拉取 npm 依赖。隔离内网环境请在**有网机器**构建后导入：
+
+```bash
+# 有网机器
+docker build -t wikidoc:1.0.0 .
+docker save wikidoc:1.0.0 -o wikidoc-image.tar
+
+# 内网目标机
+docker load -i wikidoc-image.tar
+# 将 compose 中的 build: . 改为 image: wikidoc:1.0.0，再
+docker compose up -d
+```
+
+### 6. 裸机部署（无 Docker 环境）
+
+需要 Node.js 22。务必注意：**服务端按 `../frontend/dist` 相对路径定位前端产物，工作目录必须是 `server/`**，否则首页 404 且接口正常，极易误判。
+
+```bash
+cd /opt/wikidoc/frontend && npm ci && npm run build
+cd /opt/wikidoc/server && npm ci && npm run build
+mkdir -p /var/lib/wikidoc && chown -R wikidoc:wikidoc /var/lib/wikidoc
+```
+
+`/etc/systemd/system/wikidoc.service`：
+
+```ini
+[Unit]
+Description=WikiDoc Knowledge Base
+After=network.target
+
+[Service]
+Type=simple
+User=wikidoc
+WorkingDirectory=/opt/wikidoc/server
+EnvironmentFile=/etc/wikidoc/wikidoc.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+`/etc/wikidoc/wikidoc.env`：
+
+```ini
+NODE_ENV=production
+PORT=3000
+WIKIDOC_DATA_DIR=/var/lib/wikidoc
+WIKIDOC_JWT_SECRET=<openssl rand -hex 32>
+WIKIDOC_JWT_REFRESH_SECRET=<openssl rand -hex 32>
+WIKIDOC_PUBLIC_URL=http://wiki.corp.local
+```
+
+```bash
+systemctl daemon-reload && systemctl enable --now wikidoc
+systemctl status wikidoc
+```
+
+### 7. 升级与回滚
+
+升级前**先做一次在线备份**（设置页 → 备份与统计 → 立即备份，或调用备份 API）：
+
+```bash
+git pull
+docker compose up -d --build        # 重新构建并替换容器
+docker compose ps                   # 确认 healthy
+```
+
+数据位于 `./data` 卷内，不影响业务数据。回滚：
+
+```bash
+docker compose down
+git checkout <上一个可用版本>
+docker compose up -d --build
+```
+
+若升级过程中数据结构已变更且需要回退到旧版本，则用升级前的备份文件按下一节的恢复步骤还原数据库。
+
+### 8. 备份、恢复与迁移
+
+**在线备份**（不停服，推荐日常使用）：设置页「备份与统计 → 立即备份」，或
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/admin/backup -H "Authorization: Bearer <管理员令牌>"
+```
+
+产物落在 `/data/backups/wikidoc-<时间戳>.db`。
+
+**恢复（当前版本为手工操作，尚无一键恢复接口）**：
+
+```bash
+docker compose stop                                  # 必须先停服
+cp ./data/wikidoc.db ./data/wikidoc.db.bak-$(date +%F)
+cp ./data/backups/wikidoc-<时间戳>.db ./data/wikidoc.db
+rm -f ./data/wikidoc.db-wal ./data/wikidoc.db-shm    # 关键：清除旧 WAL，否则与新库冲突
+docker compose start
+curl http://127.0.0.1:8080/api/health                # 确认 {"code":0,"data":{"status":"ok"}}
+```
+
+备份文件仅含数据库本身。若使用了在线备份 API，恢复后 `/data/uploads/` 中的附件需另行保留（建议整卷备份覆盖）。
+
+**整卷迁移**（换机器时推荐）：打包整个 `./data` 目录，**必须包含 `.master_key`**。缺少该文件时服务仍可启动，但此前加密保存的 LDAP 绑定密码、OIDC Secret、SMTP 密码将无法解密，需要到设置页重新填写。
+
+### 9. 首次部署验收清单
+
+不要只看容器 healthy，以下 15 项逐条通过后再交付用户使用：
+
+| # | 验收项 | 操作方式 | 通过标准 |
+| --- | --- | --- | --- |
+| 1 | 容器健康 | `docker compose ps` | STATUS = `Up (healthy)` |
+| 2 | 健康接口 | `curl http://host:8080/api/health` | 返回 `{"code":0,"data":{"status":"ok"}}` |
+| 3 | 首页可达 | 浏览器打开 `http://host:8080` | 正常显示登录页，无空白 |
+| 4 | 管理员登录 | `admin` + 初始密码 | 登录成功进入首页 |
+| 5 | 修改默认密码 | 用户菜单 → 修改密码 → 退出重登 | 新密码可登录，旧密码失效 |
+| 6 | 空间与文档 | 新建空间 → 新建文档 → 编辑器保存 | 详情页显示正文，版本列表出现记录 |
+| 7 | 中文检索 | 搜索正文中的双字词（如"域控""防火墙"） | 命中目标文档；单字也能兜底出结果 |
+| 8 | 版本回滚 | 历史版本 → 回滚 | 正文回到所选版本内容 |
+| 9 | Word 导入 | 上传一份真实 `.docx`（含图片） | 转为 Markdown，图片可正常显示 |
+| 10 | Excel 导入 | 上传一份 `.xlsx` | 转为多维表格，行列数据一致 |
+| 11 | 回收站 | 删除文档 → 回收站 → 恢复 | 文档回到原位置 |
+| 12 | 权限隔离 | 建普通用户 → 仅授予某空间只读 | 该用户看不到未授权空间、无法编辑 |
+| 13 | 在线备份 | 设置页 → 立即备份 | 生成 `wikidoc-<时间戳>.db` |
+| 14 | 通知到达 | 配置企微/飞书/SMTP 任一 → 测试发送 | 对应群或邮箱**实际收到**消息 |
+| 15 | 域账号登录 | 填 LDAP 配置 → 测试连接 → 域账号登录 | 连通成功且域用户自动建号 |
+
+第 9、10 项建议用**真实业务文档**验证而非构造的简单文件；第 14、15 项依赖外部系统，是部署中最容易遗漏的部分。
+
+### 10. 常见故障排查
+
+```bash
+docker compose logs -f wikidoc          # 实时日志
+docker compose logs --tail=200 wikidoc  # 最近 200 行
+docker inspect wikidoc --format '{{.State.Health.Status}}'
+```
+
+| 症状 | 排查方向 |
+| --- | --- |
+| 容器反复重启 | 日志中出现主密钥错误 → 检查 `WIKIDOC_MASTER_KEY` 或 `/data/.master_key` |
+| 一直 `(health: starting)` 超 1 分钟 | `/api/health` 未响应 → 看日志是否为端口占用或编译失败 |
+| 能访问 IP:8080 但登录 401 | 多为 Cookie 被代理吞掉 → 检查反代是否透传 `Host` 与 `X-Forwarded-*` |
+| 首页白屏但接口正常 | 前端产物未被托管 → 检查 `/app/frontend/dist` 是否存在，裸机部署检查工作目录是否为 `server/` |
+| 上传失败 | 应用层 50MB 与反代 `client_max_body_size` 两层限制 |
+| 中文搜不到预期内容 | 确认文档已保存（索引随写入更新），双字词走 FTS、单字走 LIKE 兜底 |
+| 数据目录权限报错 | `chown -R 1000:1000 ./data` |
+
+### 11. 数据目录权限报错（特殊环境）
+
+不支持修改宿主机目录属主时（Windows 共享目录、部分 NAS），改用命名卷：
+
+```yaml
+services:
+  wikidoc:
+    volumes:
+      - wikidoc-data:/data
+volumes:
+  wikidoc-data:
+```
+
+数据实际位置用 `docker volume inspect wikidoc_wikidoc-data` 查看，备份时直接对该卷目录操作。
+
 ## 配置指南
 
 以下集成均在 Web 界面配置：登录管理员账号 → 管理后台 → 系统设置。
@@ -127,7 +365,7 @@ LDAP / OIDC / 通知渠道等运行期配置存于数据库 `site_settings` 表�
 
 ### 在线备份（推荐）
 
-管理员登录后调用内置备份接口，它使用 SQLite 在线备份机制生成一致性快照，无需停服：
+管理员登录后调用内置备份接口，它使用 SQLite 在线备份机制生成一致性快照，无需停服（命令行用法与**完整恢复/迁移步骤**见「部署指南 → 备份、恢复与迁移」）：
 
 ```bash
 curl -X POST http://127.0.0.1:8080/api/admin/backup -H "Authorization: Bearer <管理员令牌>"
@@ -205,7 +443,7 @@ npm run dev      # tsx watch,热重载,数据落在 server/data/
 **前端**（Vite，监听 5173，`/api` 自动代理到 `http://localhost:3000`）：
 
 ```bash
-cd client
+cd frontend
 npm install
 npm run dev
 ```
