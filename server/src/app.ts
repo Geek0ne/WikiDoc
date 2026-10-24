@@ -51,10 +51,24 @@ export function createApp(): express.Express {
 
   loadRoutes(app);
 
-  // 前端构建产物存在时单端口托管，实现"部署后只暴露一个端口"
+  // 前端构建产物存在时单端口托管，实现"部署后只暴露一个端口"。
+  // index.html 必须禁缓存：它引用带内容哈希的资源文件名，
+  // 若被缓存，发版后浏览器会继续请求已不存在的旧哈希资源，
+  // 静态未命中时兜底路由返回 HTML，浏览器按 CSS 解析失败导致页面裸奔。
   if (fs.existsSync(config.clientDist)) {
-    app.use(express.static(config.clientDist, { maxAge: '1h', index: false }));
+    app.use(
+      express.static(config.clientDist, {
+        maxAge: '1h',
+        index: false,
+        setHeaders(res, filePath) {
+          if (filePath.endsWith('index.html')) {
+            res.setHeader('Cache-Control', 'no-cache');
+          }
+        },
+      })
+    );
     app.get(/^\/(?!api\/).*/, (_req, res) => {
+      res.set('Cache-Control', 'no-cache');
       res.sendFile(path.join(config.clientDist, 'index.html'));
     });
   }

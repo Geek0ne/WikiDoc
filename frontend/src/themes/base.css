@@ -1,3 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
 /**
  * WikiDoc 主题基线。
  * 通过 <html data-theme="light|dark"> 与 <html data-accent="default|forest|sunset">
