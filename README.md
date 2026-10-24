@@ -129,7 +129,7 @@ environment:
 
 - **JWT 两个密钥不设置时，容器每次重启都会重新随机生成，导致所有人登录态失效**。生成方式：`openssl rand -hex 32`
 - **反代或域名访问时必须设置 `WIKIDOC_PUBLIC_URL`**，否则 SSO 回调地址与通知消息中的链接会指向默认的 `http://localhost:3000`
-- 密钥建议写入 `.env` 文件并在 compose 的 service 下增加 `env_file: - .env`（注意：Compose 不会自动把 `.env` 注入容器，必须显式声明 `env_file`）；或直接填写在 `environment` 中
+- 密钥建议写入 `.env` 文件并在 compose 的 service 下增加 `env_file: - .env`（注意：Compose 不会自动把 `.env` 注入容器，必须显式声明 `env_file`）；或直接填写在 `environment` 中。仓库已提供 [`.env.example`](./.env.example)，复制为 `.env` 后按注释填写即可
 
 ### 4. 反向代理与 HTTPS
 
